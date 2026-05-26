@@ -5,8 +5,11 @@
 // 最後更新：2026-04-30（依後端 PR #36 全面修正：STAFF /api/ → /staff/、REGIONS 路徑重構、orders get_by_phone、產品銷售報表路徑）
 // =====================================================
 
+import { environment } from "../../environments/environment";
+
 export const API_CONFIG = {
-  BASE_URL: '', // 透過 Angular proxy 轉發，相對路徑即可（proxy.conf.json → localhost:8080）
+  // BASE_URL: '', // 透過 Angular proxy 轉發，相對路徑即可（proxy.conf.json → localhost:8080）
+  BASE_URL: environment.apiUrl,
   TIMEOUT: 60000, // 10 秒逾時
 
   ENDPOINTS: {

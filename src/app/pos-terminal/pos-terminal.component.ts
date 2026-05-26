@@ -705,44 +705,41 @@ export class PosTerminalComponent implements OnInit, AfterViewInit, OnDestroy {
           /* ── 付款方式：後端已回傳 paymentMethod 欄位 ── */
           const rawPayment: string = o.paymentMethod ?? o.payMethod ?? '';
           const payStatus: string = o.payStatus ?? o.paymentStatus ?? '';
+          const orderStatus: string = o.ordersStatus ?? '';
           const isCash =
             rawPayment === 'CASH' ||
-            (payStatus === 'UNPAID' && rawPayment === '') ||
-            o.ordersStatus === 'PENDING_CASH' ||
-            o.kitchenStatus === 'PENDING_CASH';
+            orderStatus === 'PENDING_CASH' ||
+            orderStatus === 'AWAITING_PAYMENT';
 
-         /* ── 狀態映射：所有 READY 訂單進「餐點製作完成」，由員工手動完成 ── */
-          const statusMap: Record<
-            string,
-            'pending-cash' | 'waiting' | 'cooking' | 'ready' | 'done'
-          > = {
-            PENDING_CASH: 'pending-cash',
-            UNPAID: 'pending-cash',
-            WAITING: 'waiting',
-            COOKING: 'cooking',
-            READY: 'ready',
-            AWAITING_PAYMENT: 'pending-cash',
-            COMPLETED: 'done',
-            PICKED_UP: 'done',
-          };
-          const rawStatus = (o.kitchenStatus ?? '') || o.ordersStatus;
           const status =
-            o.ordersStatus === 'AWAITING_PAYMENT'
-              ? 'pending-cash'
-              : (statusMap[rawStatus] ??
-                statusMap[o.ordersStatus] ??
-                'waiting');
+            orderStatus === 'PREPARING'
+              ? 'waiting'
+              : orderStatus === 'READY'
+                ? payStatus === 'PAID'
+                  ? 'ready'
+                  : 'pending-cash'
+                : orderStatus === 'PICKED_UP'
+                  ? 'done'
+                  : orderStatus === 'COMPLETED'
+                    ? 'done'
+                    : orderStatus === 'UNPAID'
+                      ? 'pending-cash'
+                      : orderStatus === 'AWAITING_PAYMENT'
+                        ? 'pending-cash'
+                        : orderStatus === 'PENDING_CASH'
+                          ? 'pending-cash'
+                          : orderStatus === 'WAITING'
+                            ? 'waiting'
+                            : orderStatus === 'COOKING'
+                              ? 'cooking'
+                              : 'waiting';
 
           const payMethod =
-            o.ordersStatus === 'COMPLETED'
+            payStatus === 'PAID'
               ? '已付款'
-              : isCash
-                ? '現金'
-                : rawPayment === 'CREDIT_CARD'
-                  ? '信用卡'
-                  : rawPayment === 'MOBILE_PAY'
-                    ? '行動支付'
-                    : '待付款';
+              : payStatus === 'UNPAID'
+                ? '未付款'
+                : '未付款';
 
           const orderNumber = `${o.orderDateId}-${String(idx + 1).padStart(4, '0')}`;
           /* 同時比對 DB id 和 number，避免 POS 下單後 polling 重複新增 */
@@ -750,8 +747,6 @@ export class PosTerminalComponent implements OnInit, AfterViewInit, OnDestroy {
             this.orderService.orders().find((x) => x.id === existingId) ??
             this.orderService.orders().find((x) => x.number === orderNumber);
           if (!existing) {
-            /* 頁面載入時，已是終態的舊訂單不塞進看板 */
-            if (status === 'done') return;
             this.orderService.addOrder({
               id: existingId,
               number: orderNumber,
@@ -764,33 +759,31 @@ export class PosTerminalComponent implements OnInit, AfterViewInit, OnDestroy {
               isCash,
               source: 'customer',
               customerName: '',
-              orderType: (o.phone ?? '').startsWith('GUEST') ? '訪客' : '會員',
+              orderType: o.memberId === 1 ? '訪客' : '會員',
             } as LiveOrder);
           } else {
             const targetId = existing.id;
-            /* 輪詢只允許狀態往前推進，終態(done/paid/cancelled)完全鎖定 */
+            /* 終態(done/paid/cancelled)完全鎖定；其他狀態差異則同步更新 */
             const isTerminal =
               existing.status === 'done' ||
               existing.status === 'paid' ||
               existing.status === 'cancelled';
-            if (!isTerminal) {
-              const statusLevel: Record<string, number> = {
-                waiting: 0, cooking: 1, ready: 2, 'pending-cash': 3, done: 4,
-              };
-              const existingLevel = statusLevel[existing.status] ?? 0;
-              const newLevel = statusLevel[status] ?? 0;
-              if (newLevel > existingLevel) {
-                this.orderService.updateStatus(targetId, status);
-              }
+            if (!isTerminal && existing.status !== status) {
+              this.orderService.updateStatus(targetId, status);
             }
             if (
+              existing.source === 'customer' &&
+              payMethod !== existing.payMethod
+            ) {
+              this.orderService.updatePayMethod(targetId, payMethod);
+            } else if (
               isCash &&
               (!existing.isCash || existing.payMethod === '待付款')
             ) {
               this.orderService.updatePayMethodAndCash(targetId, '現金', true);
             } else if (
               existing.payMethod === '待付款' &&
-              payMethod !== '待付款'
+              payMethod !== '未付款'
             ) {
               this.orderService.updatePayMethod(targetId, payMethod);
             }
@@ -1334,9 +1327,20 @@ export class PosTerminalComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /* ── 現金收款完成（POS 看板內移動的訂單）────────── */
   async completeCashOrder(order: LiveOrder): Promise<void> {
-    /* 線上現金訂單建立時未傳 paymentMethod，後端 DB 存空字串，
-     * 故 cash_confirm 永遠回傳 400（paymentMethod != CASH）。
-     * 改以 orders_status(PICKED_UP) 直接標記取餐完成。 */
+    /* 先呼叫 cash_confirm API 確認付款 */
+    const match = order.id.match(/^DB-(\d{8})-(\d+)$/);
+    if (match) {
+      try {
+        await firstValueFrom(
+          this.apiService.confirmCashPayment(match[2], match[1], order.total),
+        );
+      } catch (err) {
+        /* 線上現金訂單可能因 paymentMethod 不是 CASH 而失敗，忽略錯誤繼續 */
+        console.warn('[POS] cash_confirm 失敗，繼續更新狀態', err);
+      }
+    }
+
+    /* 然後更新狀態標記取餐完成 */
     this.orderService.updateStatus(order.id, 'paid');
     this._pushOrdersStatus(order.id, 'PICKED_UP');
     this.posShowToast(`收款完成：${order.number}`);
@@ -1371,7 +1375,7 @@ export class PosTerminalComponent implements OnInit, AfterViewInit, OnDestroy {
           console.warn(`[POS] ordersStatus ${ordersStatus} 更新失敗`),
       });
   }
-  
+
   /* ── 載入庫存管理頁清單，同步作為 POS 點餐商品來源 ── */
   private loadStockList(): void {
     const globalAreaId = this.authService.currentStaff?.globalAreaId ?? 19;

@@ -1994,6 +1994,7 @@ export class CustomerHomeComponent implements OnInit, OnDestroy {
                   next: (res) => {
                     if (res?.code !== 200) return;
 
+                    const backendStatus = String(res.message ?? '').trim().toUpperCase();
                     const statusMap: Record<string, OrderStatus> = isCash
                       ? {
                         PREPARING: 'waiting',
@@ -2025,7 +2026,7 @@ export class CustomerHomeComponent implements OnInit, OnDestroy {
                       return;
                     }
                     const newStatus =
-                      statusMap[res.message] ?? cur?.status ?? 'waiting';
+                      statusMap[backendStatus] ?? cur?.status ?? 'waiting';
                     if (!cur || cur.status !== newStatus) {
                       this.orderService.updateStatus(t.orderId, newStatus);
                     }
@@ -2167,34 +2168,60 @@ export class CustomerHomeComponent implements OnInit, OnDestroy {
       this.apiService.getAllOrders({ memberId: userForOrders.id }).subscribe({
         next: (res) => {
           if (res?.getOrderVoList?.length) {
-            this.orderHistoryList.set(
-              res.getOrderVoList.map((o: GetOrdersVo) => ({
-                id: o.id,
-                date: o.completedAt?.slice(0, 10) ?? o.orderDateId ?? '',
-                items: (
-                  o.GetOrdersDetailVoList ??
-                  o.getOrdersDetailVoList ??
-                  []
-                )
-                  .filter((d: GetOrdersDetailVo) => !d.gift)
-                  .map(
-                    (d: GetOrdersDetailVo) =>
-                      `${d.name || d.productName || '?'} × ${d.quantity}`,
-                  )
-                  .join('、'),
-                itemsJP: '',
-                itemsKR: '',
-                total: +o.totalAmount,
-                status:
-                  o.ordersStatus === 'COMPLETED'
-                    ? ('completed' as const)
-                    : o.ordersStatus === 'CANCELLED'
-                      ? ('cancelled' as const)
-                      : o.ordersStatus === 'REFUNDED'
-                        ? ('refunded' as const)
-                        : ('completed' as const),
-              })),
-            );
+            const today = `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}`;
+            const historyOrders: Array<{
+              id: string;
+              date: string;
+              items: string;
+              itemsJP: string;
+              itemsKR: string;
+              total: number;
+              status: string;
+            }> = [];
+            const activeOrdersFromHistory: ActiveOrder[] = [];
+
+            res.getOrderVoList.forEach((o: GetOrdersVo) => {
+              const isToday = o.orderDateId === today;
+              const isCompleted = !isToday || o.ordersStatus === 'PICKED_UP';
+              const detailList = o.GetOrdersDetailVoList ?? o.getOrdersDetailVoList ?? [];
+              const itemsStr = detailList
+                .filter((d: GetOrdersDetailVo) => !d.gift)
+                .map((d: GetOrdersDetailVo) => `${d.name || d.productName || '?'} × ${d.quantity}`)
+                .join('、');
+              const itemsArr = detailList
+                .filter((d: GetOrdersDetailVo) => !d.gift)
+                .map((d: GetOrdersDetailVo) => `${d.name || d.productName || '?'} × ${d.quantity}`);
+
+              if (isCompleted) {
+                // 放進已完成
+                historyOrders.push({
+                  id: o.id,
+                  date: o.completedAt?.slice(0, 10) ?? o.orderDateId ?? '',
+                  items: itemsStr,
+                  itemsJP: '',
+                  itemsKR: '',
+                  total: +o.totalAmount,
+                  status: 'completed' as const,
+                });
+              } else {
+                // 當天的未完成，放進 activeOrders
+                const activeStatus: ActiveOrder['status'] = o.ordersStatus === 'READY' ? 'ready' : 'cooking';
+                activeOrdersFromHistory.push({
+                  id: o.id,
+                  number: o.id,
+                  status: activeStatus,
+                  items: itemsArr,
+                  total: +o.totalAmount,
+                  createdAt: o.orderDateId ?? '',
+                  payMethod: '現金',
+                  isCash: true,
+                  estimatedMinutes: 10,
+                });
+              }
+            });
+
+            this.orderHistoryList.set(historyOrders);
+            this.activeOrders.set(activeOrdersFromHistory);
           }
           /* 若後端回空清單，保留 mock 歷史訂單供 Demo 使用 */
         },
@@ -2636,6 +2663,16 @@ export class CustomerHomeComponent implements OnInit, OnDestroy {
 
     /* ── 現金：直接進入待付款追蹤 ── */
     if (this.paymentMethod() === 'cash') {
+      // 呼叫支付 API 記錄現金支付
+      const payReq = {
+        id: orderId,
+        orderDateId: orderDateId,
+        paymentMethod: 'CASH',
+        transactionId: 'CASH_PAYMENT',
+        totalAmount: this.backendConfirmedTotal() ?? 0,
+      };
+      await firstValueFrom(this.apiService.pay(payReq));
+
       this._afterOrderSuccess(orderId, orderDateId, 'waiting', true);
       return;
     }
@@ -2675,7 +2712,7 @@ export class CustomerHomeComponent implements OnInit, OnDestroy {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const timeStr = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    const orderNum = `${orderDateId}-${orderId}`;
+    const orderNum = `${orderDateId}-${String(parseInt(orderId, 10)).padStart(4, '0')}`;
     const trackId = orderDateId ? `DB-${orderDateId}-${orderId}` : orderId;
     const itemTexts = this.cartItems().map((i) => `${i.name} × ${i.quantity}`);
     const promoGift = this.selectedPromoGift();
@@ -2738,6 +2775,7 @@ export class CustomerHomeComponent implements OnInit, OnDestroy {
           .subscribe({
             next: (res) => {
               if (res?.code !== 200) return;
+              const backendStatus = String(res.message ?? '').trim().toUpperCase();
               const statusMap: Record<string, OrderStatus> = isCash
                 ? {
                   PREPARING: 'waiting',
@@ -2769,7 +2807,7 @@ export class CustomerHomeComponent implements OnInit, OnDestroy {
                 return;
               }
               const newStatus =
-                statusMap[res.message] ?? current?.status ?? 'waiting';
+                statusMap[backendStatus] ?? current?.status ?? 'waiting';
               if (current && current.status !== newStatus) {
                 this.orderService.updateStatus(trackId, newStatus);
               }

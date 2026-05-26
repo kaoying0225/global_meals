@@ -1039,7 +1039,7 @@
 @if (activeTab() === "board") {
   <div class="page-panel" style="display: block">
     <div class="panel-title">訂單看板</div>
-  
+
 
 
     <!-- ── 報電話號碼取餐查詢 ── -->
@@ -1188,8 +1188,6 @@
                   @if (order.orderType === "會員") { <span class="badge-customer">會員</span> }
                   @else if (order.orderType === "訪客") { <span class="ob-type-badge">訪客</span> }
                   @else if (order.orderType) { <span class="ob-type-badge">{{ order.orderType }}</span> }
-                  @if (order.source === 'customer') { <span class="badge-online">線上</span> }
-                  @if (order.source === 'pos') { <span class="badge-ok">已收款</span> }
                 </div>
               </div>
               <div class="ob-items-list">
@@ -1217,8 +1215,6 @@
                   @if (order.orderType === "會員") { <span class="badge-customer">會員</span> }
                   @else if (order.orderType === "訪客") { <span class="ob-type-badge">訪客</span> }
                   @else if (order.orderType) { <span class="ob-type-badge">{{ order.orderType }}</span> }
-                  @if (order.source === 'customer') { <span class="badge-online">線上</span> }
-                  @if (order.source === 'pos') { <span class="badge-ok">已收款</span> }
                 </div>
               </div>
               <div class="ob-items-list">
@@ -1263,8 +1259,6 @@
                   @if (order.orderType === "會員") { <span class="badge-customer">會員</span> }
                   @else if (order.orderType === "訪客") { <span class="ob-type-badge">訪客</span> }
                   @else if (order.orderType) { <span class="ob-type-badge">{{ order.orderType }}</span> }
-                  @if (order.source === 'customer') { <span class="badge-online">線上</span> }
-                  @if (order.source === 'pos') { <span class="badge-ok">已收款</span> }
                 </div>
               </div>
               <div class="ob-items-list">
@@ -1276,7 +1270,10 @@
                 <span>{{ order.payMethod }}</span>
                 <span class="ob-total">${{ order.total }}</span>
               </div>
-              @if (order.isCash && order.source === 'customer') {
+              @if (
+                order.source === 'customer' &&
+                (order.payMethod === '未付款' || order.payMethod === '待付款')
+              ) {
                 <button class="ob-action-btn ob-action-btn--cash" (click)="moveToUnpaid(order.id)">
                   移至結帳
                 </button>
@@ -1397,8 +1394,6 @@
               <div class="ob-card-top">
                 <span class="ob-num">{{ order.number }}</span>
                 <div class="ob-badges">
-                  @if (order.source === 'customer') { <span class="badge-online">線上</span> }
-                  @if (order.source === 'pos') { <span class="badge-ok">已收款</span> }
                   <span class="badge-ok">取餐完畢</span>
                 </div>
               </div>
@@ -1417,7 +1412,6 @@
               <div class="ob-card-top">
                 <span class="ob-num">{{ order.number }}</span>
                 <div class="ob-badges">
-                  @if (order.source === 'customer') { <span class="badge-online">線上</span> }
                   <span class="badge-ok">已收款</span>
                 </div>
               </div>
@@ -1741,7 +1735,7 @@
 
     <div class="mb-4">
       <div class="panel-title" style="margin-bottom: 2px">活動一覽</div>
-      
+
     </div>
 
     <!-- 活動卡片格列 -->
@@ -1800,7 +1794,7 @@
                   <span class="badge-warn">已暫停</span>
                 }
               </div>
-            </div>  
+            </div>
           </div>
         }
       </div>
